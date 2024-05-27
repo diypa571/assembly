@@ -1,6 +1,10 @@
 Kod för CPU1
 Assembly instruktioner
-Följande instruktioner är skrivna för AVR minirknare som kan kan utföra matematiska beräkningar
+Följande instruktioner är skrivna för AVR, en  minirknare som kan kan utföra matematiska beräkningar.
+Har tagit att cirka två månader att få konstruktuera miniräknaren som kunde fungera och utföra matematiska beräkningar.
+Det här var 2019, idag kan det göras på mycket enklare sätt. 
+
+Diyar Di Pa
 
 ;--- CPU1 ----
 ;*******Grupp 16***
