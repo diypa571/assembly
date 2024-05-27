@@ -1,0 +1,1095 @@
+Kod för CPU1
+Assembly instruktioner
+Följande instruktioner är skrivna för AVR minirknare som kan kan utföra matematiska beräkningar
+
+;--- CPU1 ----
+;*******Grupp 16***
+;***2019-03-13****
+start:
+	.def Data=r16
+	.def Delay_0=r17
+	.def Delay_1=r18
+	.def Delay_2=r19
+	.def Data_1=r20
+	.def flag=r24
+	.equ FUNC_SET=0x3c; 2 line mode
+	.equ CLR_DSP=0x01; CLR display
+	.equ DSP_ON=0x0E; Display on 
+	.equ DSP_OFF=0x08
+	.equ ENTRY=0x06; Increment mode
+	.equ C_BLINK=0x0F
+	.equ SET_DDRAM=0x00; SET DDRAM
+	.equ RS=PD3 
+	.equ RW=PD4; O=write 1=read
+	.equ EN=PD2; Aktivera
+;-Stack pekare initiering
+	ldi Data,HIGH(RAMEND)
+	out SPH,Data
+	ldi Data,LOW(RAMEND)
+	out SPL,Data
+	call HW_INIT
+MAIN:
+jmp MAIN
+;Läsa från PINA
+in r25,PINA
+andi r25,$0F
+cpi r25,$16
+brmi PRINT 
+PRINT:
+	jmp KOM
+	;Vänta tills PINA 4=0
+WAIT:
+	sbic PINA,4
+	jmp WAIT
+	call delay_1ms
+	call delay_1ms
+	call delay_1ms
+	call delay_1ms
+	call delay_1ms
+	call delay_1ms
+	jmp MAIN
+KOM:
+	ldi Data, $00
+	add Data, r25
+	rcall WRITE_MODE
+jmp WAIT
+WRITE_MODE:
+	cpi data,14
+	breq change_to_15
+	cpi data,15
+	breq change_to_14
+	rjmp end_write_mode
+change_to_15:
+	ldi data,15
+	rjmp end_write_mode
+change_to_14:
+	ldi data,14
+end_write_mode:
+	call put_char
+ret
+put_char:
+	SBI UCSRA,6; Clear TXC Flag 
+	out UDR, Data 		wait_for_d_send:
+	sbis UCSRA,6
+	jmp wait_for_d_send
+	call delay_1ms
+ret
+HW_INIT:
+	ldi r25,0 
+	out DDRA,r25  
+	//Uart baud rate=9600
+	//Avr freq=7.3728MHZ
+	//Enable TX for uart
+	out UCSRA,r25
+	ldi r25,0x08
+	out UCSRB,r25
+	ldi r25,0x86
+	out UCSRC,r25
+	;UBRR beräkning
+	;BAUD=fosc/(16*X)
+	;9600=7.3728M/(16*X)
+	;X=7.3728M/(9600*16)=48
+	;UBRR+1=47
+	;UBRR=47=> i hex är 0x2F
+	ldi r25,0x00
+	out UBRRH,r25
+	ldi r25,0x2F
+	out UBRRL,r25
+ret
+delay_1ms:
+	push r16
+	push r17
+	push r18
+	ldi r16,1
+label1:
+	LDI r17,112
+label2:
+	LDI r18,21
+label3:
+DEC r18
+	BRNE label3
+	DEC r17
+	BRNE label2
+	DEC r16
+	BRNE label1
+	pop r18
+	pop r17
+	pop r16
+	ret
+
+
+
+
+Koden för CPU2
+;---CPU2----
+.equ func_set =0x38
+.equ clr_dsp = 0x01
+.equ dsp_on = 0x0e
+.equ dsp_off = 0x08
+.equ entry =0x06
+.equ c_blink =0x0f
+.equ rs=pd3; rs=0 
+.equ rw=pd4; 0=write
+.equ en=pd2; enable
+.equ forstnr=0; Första talet
+.equ andranr=1; Andra talet
+.equ tredjenr=2; Tredje talet
+.def tmp = r28
+.def tmp2  = r27
+.def OpTyp = r26
+.def SistOpTyp = r25
+; Detektera vilket tal.
+.def detektera = r24
+.def TempV_0 = r20
+.def TempV_1 = r21
+.def TempV_2 = r22
+.def TempV_3 = r23
+.def tmp32_0 = r16
+.def tmp32_1 = r17
+.def tmp32_2 = r18
+.def tmp32_3 = r19
+;Flag används för detektera
+;Tal efter Enter eller när
+; (+,-,*) trycks
+.def flag=r14
+.def TempV2_0=r10
+.def TempV2_1=r11
+.def TempV2_2=r12
+.def TempV2_3=r13
+.def tmpmult_0=r6
+.def tmpmult_1=r7
+.def tmpmult_2=r8
+.def tmpmult_3=r9
+.def multres_0=r2
+.def multres_1=r3
+.def multres_2=r4
+.def multres_3=r5
+.def digit1=r0
+.def digit2=r1
+.def digit3=r2
+
+
+
+
+
+
+
+
+
+
+
+.def digit4=r3
+.def digit5=r4
+.def digit6=r5
+.def digit7=r6
+.def digit8=r7
+.def digit9=r8
+.def digit10=r9
+.dseg
+;Var1 för första talet
+var1:.byte 4
+var2:.byte 4
+var3:.byte 4
+;Result för resultat
+result:.byte 4
+operator:.byte 4
+;Var_hold för var1 som temp
+var_hold:.byte 4
+.cseg;code segment
+.org 0x00
+avbrott:
+jmp init
+.org 0x16;uart rx interrupt 
+UartsAvbrott:
+jmp uart_int
+.org 0x2a
+init:
+;-Stack initiering-
+	ldi r16,high(ramend)
+	out sph,r16
+	ldi r16,low(ramend)
+	out spl,r16
+	rcall hw_init
+	rcall display_init
+main:
+	jmp main 
+display_init:
+	ldi tmp,func_set 
+	rcall lcd_wr_cmd
+	ldi tmp,c_blink
+	rcall lcd_wr_cmd
+	ldi tmp,clr_dsp
+	rcall lcd_wr_cmd
+	ldi tmp,entry
+	rcall lcd_wr_cmd
+	ret
+lcd_wr_cmd:
+	;Fördröjning
+	cbi portd,rs
+	cbi portd,rw
+	out portb,tmp
+	rcall enable
+	rcall delay_1ms
+	rcall delay_1ms
+	rcall delay_1ms
+	rcall delay_1ms
+	ret
+lcd_putchar:
+	sbi portd,rs
+	cbi portd,rw
+	out portb,tmp
+	rcall enable
+	rcall delay_1ms
+	rcall delay_1ms
+	rcall delay_1ms
+	rcall delay_1ms
+	ret
+enable:
+	nop
+	nop
+	sbi portd,en
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	cbi portd,en
+	nop
+	nop
+	nop
+	nop
+	ret
+;Fördröjning
+delay_1ms:
+	push r16
+	push r17
+	push r18
+	ldi r16,1
+label1:
+	ldi r17,112
+label2:
+	ldi r18,21
+label3:
+	dec r18
+	brne label3
+	dec r17
+	brne label2
+	dec r16
+	brne label1
+	pop r18
+	pop r17
+	pop r16
+	ret
+hw_init:
+	ldi r16,0 
+	out ddra,r16
+	ldi r16,$1c
+	out ddrd,r16
+	ldi r16,$ff
+	out ddrb,r16
+	;UART baud rate=9600
+	;Avr freq=7.3728mhz
+	;Aktivera RX för UART
+	ldi r16,0x00
+	out ucsra,r16
+	ldi r16,0x90
+	out ucsrb,r16
+	ldi r16,0x86
+	out ucsrc,r16
+	ldi r16,0x00
+	out ubrrh,r16
+	ldi r16,0x2f
+	out ubrrl,r16
+	sei;aktivera avbrott
+	ldi SistOpTyp,0
+	ret
+uart_int:
+	mov SistOpTyp,OpTyp
+	in tmp2,udr;Från udr till temp2
+	cpi tmp2,0x10;Jämför tmp2,0x10 
+	breq clr_var_lcd
+	brlo hantera_digit
+	cpi tmp2,0x15
+	breq hantera_equal
+	brlo bytaktuellOtyp
+hantera_digit:
+	;OM (detektera==forstnr) 
+	cpi detektera,forstnr
+	breq first_num
+	;OM (detektera==andranr) 
+	cpi detektera,andranr
+	breq second_num
+	cpi detektera,tredjenr
+	breq third_num
+	sbis ucsra,7;Clear rx flag
+	reti
+hantera_equal:
+	;Enter Trycks
+	;Två tal beräknas
+	rcall Entryckt
+	reti
+second_num:
+	rcall hantera2e;För andra talet
+	reti
+third_num:
+	rcall hantera3e
+	reti
+first_num:
+	sbrc flag,0
+	rcall clr_allt
+	rcall hantera1e
+	reti
+bytaktuellOtyp:
+	rcall   bytaktuellOtyp2
+	reti
+gotoclear:
+	rcall lcd_clear
+	reti
+lcd_clear:
+	;0x01 LCD clear CMD
+	ldi tmp,0x01
+	rcall lcd_wr_cmd
+	ret
+gotoline2:
+	ldi tmp,0xc0
+	rcall lcd_wr_cmd
+	reti
+clr_var_lcd:
+	rcall clr_allt
+	reti
+clr_allt:
+	rcall lcd_clear
+	rcall clr_allvar
+	clr flag
+	ret
+cop_re_to_var1:
+	lds TempV_0,result+0
+	lds TempV_1,result+1
+	lds TempV_2,result+2
+	lds TempV_3,result+3
+	rcall spara_i_var1
+	ret
+spara_i_var1:
+	sts var1+0,TempV_0;Store in ram
+	sts var1+1,TempV_1
+	sts var1+2,TempV_2
+	sts var1+3,TempV_3
+	ret
+spara_i_var2:
+	sts var2+0,TempV_0;Store in ram
+	sts var2+1,TempV_1
+	sts var2+2,TempV_2
+	sts var2+3,TempV_3
+	ret
+load_TempV_with_var1:
+	lds TempV_0,var1+0
+	lds TempV_1,var1+1
+	lds TempV_2,var1+2
+	lds TempV_3,var1+3
+	ret
+load_TempV_with_var2:
+	lds TempV_0,var2+0
+	lds TempV_1,var2+1
+	lds TempV_2,var2+2
+	lds TempV_3,var2+3
+	ret
+read_var1_var2_from_ram:
+	rcall load_TempV_with_var1
+	lds TempV2_0,var2+0
+	lds TempV2_1,var2+1
+	lds TempV2_2,var2+2
+	lds TempV2_3,var2+3
+	ret
+	;Store in ram
+save_TempV_into_result:
+	sts result+0,TempV_0
+	sts result+1,TempV_1
+	sts result+2,TempV_2
+	sts result+3,TempV_3
+	ret
+clr_allvar:
+	clr TempV_0
+	clr TempV_1
+	clr TempV_2
+	clr TempV_3
+	rcall spara_i_var1
+	rcall spara_i_var2
+	clr SistOpTyp
+	sts operator,SistOpTyp
+	ldi detektera,forstnr
+	ret
+bytaktuellOtyp2:
+	rcall lcd_clear
+	cpi tmp2,0x14
+	breq case_selectionplus
+	cpi tmp2,0x13
+	breq case_selectionminus
+	cpi tmp2,0x12
+	breq case_selectionmultiply
+	cpi tmp2,0x11
+	breq case_selectiondivision
+case_selectionplus:
+	ldi OpTyp,0;plus
+	rjmp break_switch
+case_selectionminus:
+	ldi OpTyp,1;minus
+	rjmp break_switch
+case_selectionmultiply:
+	ldi OpTyp,2;multiply
+	rjmp break_switch
+case_selectiondivision:
+	ldi OpTyp,3
+break_switch:
+	cpi detektera,forstnr
+	breq case_first
+	cpi detektera,andranr
+	breq case_second
+	cpi detektera,tredjenr
+	breq case_third
+case_first:
+	ldi detektera,andranr
+	;Byta detektera till andranr
+	sts operator,OpTyp
+	rjmp Con_fun_Op
+case_second:
+	sbrc flag,0
+	rjmp pre_case_third
+	cpi SistOpTyp,2
+	brsh operation_var1_var2
+	ldi detektera,tredjenr
+	;Byta detektera till tredjenr
+	rjmp Con_fun_Op
+pre_case_third:
+	rcall BeraknaEnTryckt
+	ldi detektera,tredjenr
+	ldi tmp,0
+	sts operator,tmp
+	rjmp Con_fun_Op
+operation_var1_var2:
+	rcall BeraknaEnTryckt
+	ldi tmp,0
+	sts operator,tmp
+	rjmp Con_fun_Op
+case_third:
+	cpi SistOpTyp,2
+	brlo do_plus_minus_var1_var2
+	rcall do_mult_div_var2_var3
+	rjmp Con_fun_Op
+do_plus_minus_var1_var2:
+	push SistOpTyp
+	;Spara SistOpTyp i stack
+	lds SistOpTyp,operator
+	;Ladda första operator
+	rcall BeraknaEnTryckt
+	pop SistOpTyp
+	sts operator,SistOpTyp
+	lds TempV_0,var3+0
+	lds TempV_1,var3+1
+	lds TempV_2,var3+2
+	lds TempV_3,var3+3
+	rcall spara_i_var2
+	ldi tmp,0
+	sts var3+0,tmp
+	sts var3+1,tmp
+	sts var3+2,tmp
+	sts var3+3,tmp
+Con_fun_Op:
+	ret
+do_mult_div_var2_var3:
+	;Kopiera var1 till var_hold
+	rcall load_TempV_with_var1
+	sts var_hold+0,TempV_0
+	sts var_hold+1,TempV_1
+	sts var_hold+2,TempV_2
+	sts var_hold+3,TempV_3
+	;Flytta var2 into var1
+	rcall load_TempV_with_var2
+	rcall spara_i_var1
+	;Flytta var3 into var2
+	lds TempV_0,var3+0
+	lds TempV_1,var3+1
+	lds TempV_2,var3+2
+	lds TempV_3,var3+3
+	rcall spara_i_var2
+	rcall BeraknaEnTryckt
+	rcall load_TempV_with_var1
+	rcall spara_i_var2
+	ldi tmp,0
+	sts var3+0,tmp
+	sts var3+1,tmp
+	sts var3+2,tmp
+	sts var3+3,tmp
+	;Flytta var_hold till var1
+	lds TempV_0,var_hold+0
+	lds TempV_1,var_hold+1
+	lds TempV_2,var_hold+2
+	lds TempV_3,var_hold+3
+	rcall spara_i_var1
+	ret
+BeraknaEnTryckt:
+	cpi SistOpTyp,0
+	breq case_additionfall
+	cpi SistOpTyp,1
+	breq case_minusfall
+	cpi SistOpTyp,2
+	breq case_multiplyfall
+	cpi SistOpTyp,3
+	breq case_divisionfall
+case_minusfall:
+	rcall hantera_minus_equal_func
+	rcall addition_func
+	rjmp break_case_fall
+case_additionfall:
+	rcall addition_func
+	rjmp break_case_fall
+case_multiplyfall:
+	rcall multiply_func
+	rjmp break_case_fall
+case_divisionfall:
+	rcall division_func
+break_case_fall:
+	;Kopiera resultat till var1
+	rcall cop_re_to_var1
+	ldi tmp,0
+	sts var2+0,tmp
+	sts var2+1,tmp
+	sts var2+2,tmp
+	sts var2+3,tmp
+	ret
+Entryckt:
+	;Tryck Enter = antal gångar
+	sbrc flag,0
+	rjmp cop_re
+	mov tmp,flag
+	ori tmp,0x1
+	mov flag,tmp
+	rjmp after_breq
+cop_re:
+	rcall cop_re_to_var1
+after_breq:
+	;För hur många loop
+	ldi tmp,4
+loopa_En:
+	push tmp
+	mov SistOpTyp,OpTyp
+	ldi tmp2,0x14
+	rcall bytaktuellOtyp2
+	pop tmp
+	dec tmp
+	brne loopa_En
+	rcall cop_re_to_var1
+	rcall visaresult
+	rcall clr_allvar
+	;Skriv Resultat
+	rcall gotoline2
+	ldi r31,high(limit_messages*2)	ldi r30,low(limit_messages*2)
+	rcall lcd_visastring
+	ret
+limit_messages:
+	.db "Resultatet:",0
+lcd_visastring:
+visanext_string:
+	lpm tmp,z+
+	rcall lcd_putchar
+	cpi tmp,0;Om blir slut, limit
+	brne visanext_string
+	ret
+division_func:
+	rcall read_var1_var2_from_ram
+	ldi tmp,0;Data=0; 
+	mov tmp,TempV_3
+	andi tmp,0x80 
+	breq con_div_fu
+	mov tmp,flag
+	ori tmp,0x2
+	mov flag,tmp
+	;Om minus, two's complement
+	rcall neg_till_plus
+	rcall spara_i_var1
+con_div_fu:
+	ldi tmp2,1
+	cp  TempV2_0,tmp2
+	ldi tmp2,0
+	cpc TempV2_1,tmp2
+	cpc TempV2_2,tmp2
+	cpc  TempV2_3,tmp2
+	brlo before_end_visadiv
+	;Om temporary2 är noll
+	ldi tmp2,1
+	cp  TempV_0,tmp2
+	ldi tmp2,0
+	cpc TempV_1,tmp2
+	cpc TempV_2,tmp2
+	cpc TempV_3,tmp2
+	brlo end_visadiv
+	;Initieras med noll
+	clr multres_0
+	clr multres_1
+	clr multres_2
+	clr multres_3
+	clr tmpmult_0
+	clr tmpmult_1
+	clr tmpmult_2
+	clr tmpmult_3
+try_div:
+	;Add tmpmult + temporary2
+	;Store i tmpmult igen
+	add tmpmult_0,TempV2_0
+	adc tmpmult_1,TempV2_1
+	adc tmpmult_2,TempV2_2
+	adc tmpmult_3,TempV2_3
+	cp   TempV_0,tmpmult_0
+	cpc  TempV_1,tmpmult_1
+	cpc  TempV_2,tmpmult_2
+	cpc  TempV_3,tmpmult_3
+	;Visa result av division
+	brlo pre_visadiv
+	ldi tmp,1
+	add multres_0,tmp
+	ldi tmp,0
+	adc multres_1,tmp
+	adc multres_2,tmp
+	adc multres_3,tmp
+	rjmp try_div
+pre_visadiv:
+	sub tmpmult_0,TempV_0
+	sbc tmpmult_1,TempV_1
+	sbc tmpmult_2,TempV_2
+	sbc tmpmult_3,TempV_3
+	lsr  TempV2_3
+	ror  TempV2_2
+	ror  TempV2_1
+	ror  TempV2_0
+	cp   TempV2_0,tmpmult_0
+	cpc  TempV2_1,tmpmult_1
+	cpc  TempV2_2,tmpmult_2
+	cpc  TempV2_3,tmpmult_3
+	brlo visadiv
+	;Annars resultat av digi + 1
+	ldi tmp,1
+	add multres_0,tmp
+	ldi tmp,0
+	adc multres_1,tmp
+	adc multres_2,tmp
+	adc multres_3,tmp
+visadiv:
+	mov  TempV_0,multres_0
+	mov  TempV_1,multres_1
+	mov  TempV_2,multres_2
+	mov  TempV_3,multres_3
+	rjmp end_visadiv
+before_end_visadiv:
+	clr TempV_0
+	clr TempV_1
+	clr TempV_2
+	clr TempV_3
+end_visadiv:
+	sbrc flag,1
+	rcall neg_till_plus
+	;Konvertera result till minus
+end_div:
+	rcall save_TempV_into_result
+	ret
+multiply_func:
+	rcall read_var1_var2_from_ram
+	cp   TempV_0,TempV2_0
+	cpc  TempV_1,TempV2_1
+	cpc  TempV_2,TempV2_2
+	cpc  TempV_3,TempV2_3
+	brlo copy_var2_to_tmp32
+	rjmp copy_var1_to_tmp32
+copy_var2_to_tmp32:
+	mov  tmp32_0,TempV2_0
+	mov  tmp32_1,TempV2_1
+	mov  tmp32_2,TempV2_2
+	mov  tmp32_3,TempV2_3 
+	mov tmpmult_0,TempV_0
+	mov tmpmult_1,TempV_1
+	mov tmpmult_2,TempV_2
+	mov tmpmult_3,TempV_3
+	rjmp cpiomtmmultstorre0
+copy_var1_to_tmp32:
+	mov  tmp32_0,TempV_0
+	mov  tmp32_1,TempV_1
+	mov  tmp32_2,TempV_2
+	mov  tmp32_3,TempV_3 
+	mov tmpmult_0,TempV2_0
+	mov tmpmult_1,TempV2_1
+	mov tmpmult_2,TempV2_2
+	mov tmpmult_3,TempV2_3
+cpiomtmmultstorre0:
+	ldi tmp,1
+	cp  tmpmult_0,tmp
+	ldi tmp,0
+	cpc tmpmult_1,tmp
+	cpc tmpmult_2,tmp
+	cpc tmpmult_3,tmp
+	brlo visamult
+	clr multres_0
+	clr multres_1
+	clr multres_2
+	clr multres_3
+trymult:
+	add multres_0,tmp32_0
+	adc multres_1,tmp32_1
+	adc multres_2,tmp32_2
+	adc multres_3,tmp32_3
+	ldi tmp,0x02
+	cp  tmpmult_0,tmp
+	ldi tmp,0x00
+	cpc tmpmult_1,tmp
+	cpc tmpmult_2,tmp
+	cpc tmpmult_3,tmp
+	brlo visamult
+	ldi tmp,0x1
+	sub tmpmult_0,tmp
+	ldi tmp,0
+	sbc tmpmult_1,tmp
+	sbc tmpmult_2,tmp
+	sbc tmpmult_3,tmp
+	rjmp trymult
+visamult:	
+	mov  TempV_0,multres_0
+	mov  TempV_1,multres_1
+	mov  TempV_2,multres_2
+	mov  TempV_3,multres_3
+	;Store result av multip i ram
+	rcall save_TempV_into_result
+	ret
+hantera_minus_equal_func:
+	rcall load_TempV_with_var2
+	rcall neg_till_plus
+	rcall spara_i_var2
+	ret
+neg_till_plus:
+	;One's complement of temporary
+	com TempV_0
+	com TempV_1
+	com TempV_2
+	com TempV_3
+	;Add temporary med 1
+	;För two's complement
+	ldi tmp,1
+	add TempV_0,tmp
+	ldi tmp,0
+	adc TempV_1,tmp
+	adc TempV_2,tmp
+	adc TempV_3,tmp
+	ret
+addition_func:
+	rcall read_var1_var2_from_ram
+	add TempV_0,TempV2_0
+	adc TempV_1,TempV2_1
+	adc TempV_2,TempV2_2
+	adc TempV_3,TempV2_3
+	rcall save_TempV_into_result
+	ret
+visaresult:
+	mov tmp,TempV_3
+	andi tmp,0x80
+	breq func_hex_2_decimal
+	;Om digit är minus.
+	;Gör two's complement och visa
+	rcall neg_till_plus
+	ldi tmp,'-';Visa - på LCD
+	rcall lcd_putchar
+func_hex_2_decimal:
+	rcall hex_2_decimal
+	cpse digit10,tmp
+	rjmp visa1g_digit
+	cpse digit9,tmp
+	rjmp visa100milion_digit
+	cpse digit8,tmp
+	rjmp visa10milion_digit
+	cpse digit7,tmp
+	rjmp visa1milion_digit
+	cpse digit6,tmp
+	rjmp visa100tusen_digit
+	cpse digit5,tmp
+	rjmp visa10tusen_digit
+	cpse digit4,tmp
+	rjmp visatusen_digit
+	cpse digit3,tmp
+	rjmp visahundred_digit
+	cpse digit2,tmp
+	rjmp visaten_digit 
+	rjmp visaone_digit
+visa1g_digit:
+	mov tmp,digit10
+	rcall lcd_putchar
+visa100milion_digit:
+	mov tmp,digit9
+	rcall lcd_putchar
+visa10milion_digit:
+	mov tmp,digit8
+	rcall lcd_putchar
+visa1milion_digit:
+	mov tmp,digit7
+	rcall lcd_putchar
+visa100tusen_digit:
+	mov tmp,digit6
+	rcall lcd_putchar
+visa10tusen_digit:
+	mov tmp,digit5
+	rcall lcd_putchar
+visatusen_digit:
+	mov tmp,digit4
+	rcall lcd_putchar
+visahundred_digit:
+	mov tmp,digit3
+	rcall lcd_putchar
+visaten_digit:
+	mov tmp,digit2
+	rcall lcd_putchar
+visaone_digit:
+	;Visa result 1 digit
+	mov tmp,digit1
+	rcall lcd_putchar
+	ret
+hex_2_decimal:
+	clr digit1
+	clr digit2
+	clr digit3
+	clr digit4
+	clr digit5
+	clr digit6
+	clr digit7
+	clr digit8
+	clr digit9
+	clr digit10
+;0x3b9aca00 är hex = 1000000000
+minus_1g:
+	ldi  tmp32_0,low  (0x3b9aca00)
+	ldi  tmp32_1,high (0x3b9aca00)
+	ldi  tmp32_2,byte3(0x3b9aca00)
+	ldi  tmp32_3,byte4(0x3b9aca00)
+	rcall compare32bit
+	brlo minus_100m
+	rcall sub32bit
+	inc digit10
+	rjmp minus_1g
+minus_100m:;0x5f5e100=100000000
+	ldi  tmp32_0,low  (0x05f5e100)
+	ldi  tmp32_1,high (0x05f5e100)
+	ldi  tmp32_2,byte3(0x05f5e100)
+	ldi  tmp32_3,byte4(0x05f5e100)
+	rcall compare32bit
+	brlo minus_10m
+	rcall sub32bit
+	inc digit9
+rjmp minus_100m
+minus_10m: 
+	ldi  tmp32_0,low  (0x989680)
+	ldi  tmp32_1,high (0x989680)
+	ldi  tmp32_2,byte3(0x989680)
+	ldi  tmp32_3,byte4(0x989680)
+	rcall compare32bit
+	brlo minus_1m
+	rcall sub32bit
+	inc digit8
+	rjmp minus_10m
+minus_1m:
+	ldi  tmp32_0,low  (0xf4240)
+	ldi  tmp32_1,high (0xf4240)
+	ldi  tmp32_2,byte3(0xf4240)
+	ldi  tmp32_3,byte4(0xf4240)
+	rcall compare32bit
+	brlo minus_100k
+	rcall sub32bit
+	inc digit7
+	rjmp minus_1m
+minus_100k:;0x186a0 är av 100000
+	;Om tempo <100000 minus_10k
+	ldi  tmp32_0,low (0x186a0)
+	ldi  tmp32_1,high (0x186a0)
+	ldi  tmp32_2,byte3(0x186a0)
+	ldi  tmp32_3,byte4(0x186a0)
+	rcall compare32bit
+	brlo minus_10k
+	rcall sub32bit
+	inc digit6
+	rjmp minus_100k
+minus_10k:
+	;0x2710 är hex =10 000
+	ldi  tmp32_0,low  (0x2710)
+	ldi  tmp32_1,high (0x2710)
+	ldi  tmp32_2,byte3(0x2710)
+	ldi  tmp32_3,byte4(0x2710)
+	rcall compare32bit
+	brlo minus_1k
+	rcall sub32bit
+	inc digit5
+	rjmp minus_10k
+minus_1k:
+	;0x3e8 i hex är 1000
+	ldi  tmp32_0,low  (0x3e8)
+	ldi  tmp32_1,high (0x3e8)
+	ldi  tmp32_2,byte3(0x3e8)
+	ldi  tmp32_3,byte4(0x3e8)
+	rcall compare32bit
+	brlo minus_100
+	rcall sub32bit
+	inc digit4
+	rjmp minus_1k
+minus_100:
+	;Om temporary <100 minus10
+	ldi  tmp32_0,low  (0x64)
+	ldi  tmp32_1,high (0x64)
+	ldi  tmp32_2,byte3(0x64)
+	ldi  tmp32_3,byte4(0x64)
+	rcall compare32bit
+	brlo minus_10
+	;Annars temporary=temporary-100
+	rcall sub32bit
+	inc digit3
+	rjmp minus_100
+minus_10:
+	ldi  tmp32_0,low  (0xa)
+	ldi  tmp32_1,high (0xa)
+	ldi  tmp32_2,byte3(0xa)
+	ldi  tmp32_3,byte4(0xa)
+	rcall compare32bit
+	brlo end_of_convert
+	rcall sub32bit
+	inc digit2
+	rjmp minus_10
+end_of_convert:
+	mov digit1,TempV_0
+	;Konvertera till ASCII
+	ldi tmp,0x30
+	add digit10,tmp
+	add digit9,tmp
+	add digit8,tmp
+	add digit7,tmp
+	add digit6,tmp
+	add digit5,tmp
+	add digit4,tmp
+	add digit3,tmp
+	add digit2,tmp
+	add digit1,tmp	
+	ret
+sub32bit:
+	sub TempV_0,tmp32_0
+	sbc TempV_1,tmp32_1
+	sbc TempV_2,tmp32_2
+	sbc TempV_3,tmp32_3
+	ret
+compare32bit:
+	cp   TempV_0,tmp32_0
+	cpc  TempV_1,tmp32_1
+	cpc  TempV_2,tmp32_2
+	cpc  TempV_3,tmp32_3
+	ret
+hantera3e:
+	;Read var3 och store temp
+	lds TempV_0,var3+0
+	lds TempV_1,var3+1
+	lds TempV_2,var3+2
+	lds TempV_3,var3+3
+	rcall check_less_than_max
+	cpi tmp,1
+	breq calcthird
+	ret;Om digit>  max
+calcthird:
+	;Visa nya tryckta digit
+	;Och x10 med före digits
+	rcall do_var_multiply_10
+	;Stor temporary i var3 av ram
+	sts var3+0,TempV_0
+	sts var3+1,TempV_1
+	sts var3+2,TempV_2
+	sts var3+3,TempV_3	
+	ret
+hantera2e:
+	rcall load_TempV_with_var2
+	rcall check_less_than_max
+	cpi tmp,1
+	breq calcsecond
+	ret; Om digit>max return
+calcsecond:
+	rcall do_var_multiply_10
+	rcall spara_i_var2
+	ret
+hantera1e:
+	rcall load_TempV_with_var1
+	rcall check_less_than_max
+	cpi tmp,1
+	breq calcfirst
+	ret
+calcfirst:
+	rcall do_var_multiply_10
+	rcall spara_i_var1
+	ret
+check_less_than_max:
+	ldi  tmp32_0,low (0xcccccc2)
+	ldi  tmp32_1,high (0xcccccc2)
+	ldi  tmp32_2,byte3(0xcccccc2)
+	ldi  tmp32_3,byte4(0xcccccc2)
+	rcall compare32bit
+	brlo ok_digit
+	;--Visa limit i line2---
+	rcall gotoline2
+	ldi r31,high(limit_message*2)
+	ldi r30,low(limit_message*2)
+	rcall lcd_visastring
+	ldi tmp,0;Return 0
+	ret
+ok_digit:
+	ldi tmp,1;Return 1
+	ret
+limit_message:
+	.db "*limit*",0
+do_var_multiply_10:
+	ldi tmp,0x30
+	add tmp,tmp2
+	rcall lcd_putchar
+	clr TempV2_0
+	clr TempV2_1
+	clr TempV2_2
+	clr TempV2_3
+	ldi tmp,10
+	;Multiply forsta 8bit
+	mul TempV_0,tmp
+	mov TempV2_0,r0
+	mov TempV2_1,r1
+	;Multiply andra 8bit
+	mul TempV_1,tmp
+	add TempV2_1,r0
+	adc TempV2_2,r1
+	;Multiply tredje 8bit
+	mul TempV_2,tmp
+	add TempV2_2,r0
+	adc TempV2_3,r1
+	;Multiply third 8bit
+	mul TempV_3,tmp
+	add TempV2_3,r0
+	mov TempV_0,TempV2_0 
+	mov TempV_1,TempV2_1 
+	mov TempV_2,TempV2_2 
+	mov TempV_3,TempV2_3
+	ldi tmp,0
+	add TempV_0,tmp2
+	adc TempV_1,tmp
+	adc TempV_2,tmp
+	adc TempV_3,tmp
+	ret
+/*
+1- Hur utförs minus?
+T.ex. 
+3267-1000 = 2267
+3267 i  hex = 0xcc3
+-1000 i hex = 0xfc18
+2267 i hex = 0x8db
+För beräkningar, vi har gjort på följande sätt.
+Första:    0xc3 + 0x18 = 0xdb och  carry är 0
+Andra:    0xc + 0xfc + carry = 0x08 och carry är 1
+ Resultatet blir 0x08db = 2267
+
+2- Hur gör vi multiplikation?	
+T.ex. 
+5*4 = 20
+5 +5 + 5+5 = 20
+Med upprepad addition gör vi en multiplikation.
+*/
+
